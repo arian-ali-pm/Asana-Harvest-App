@@ -2,62 +2,90 @@
 Asana vs Harvest Dashboard
 ==========================
 
-Single-file local app. Estimated vs Asana logged vs Harvest actual,
-side by side, auto-refreshing.
+A multi-tenant web app that displays Asana estimates, Asana logged time,
+and Harvest actual hours side by side per task and per project.
 
-WHY THIS EXISTS
----------------
-Calling Asana and Harvest directly from a browser (e.g. a Claude artifact)
-hits CORS preflight failures because both APIs do not allow authenticated
-calls from arbitrary origins. This app sidesteps that by running a tiny
-Python web server on your own machine. The browser talks to your local
-server, and your local server talks to Asana/Harvest. No CORS, no leaks.
+ARCHITECTURE
+------------
+FastAPI server serving a single-page React app. Users sign in with Google
+OAuth (allowlisted by email domain). Each user's Asana and Harvest tokens
+are encrypted at rest using Fernet (AES-128-CBC) and only decrypted at
+request time to call the upstream APIs. State and tokens live in a
+Postgres database (Supabase) in production, or SQLite locally.
+
+ENVIRONMENT VARIABLES
+---------------------
+Required:
+  FERNET_KEY            - Fernet encryption key for tokens at rest
+  GOOGLE_CLIENT_ID      - Google OAuth client ID
+  GOOGLE_CLIENT_SECRET  - Google OAuth client secret
+  SESSION_SECRET        - Random string for signing session cookies
+Optional:
+  DATABASE_URL          - sqlite:///... or postgresql+psycopg://... 
+                          (defaults to ~/.asana_harvest_dashboard.db)
+  APP_BASE_URL          - Base URL for OAuth callbacks
+                          (defaults to http://localhost:8765)
+  ALLOWED_EMAIL_DOMAINS - Comma-separated email domain allowlist
+  PORT                  - Server port (Render sets this automatically)
 
 SETUP
 -----
-1. Save this file as `asana_harvest_dashboard.py`
-2. Install deps:
-       pip install fastapi uvicorn httpx
-3. Run it:
-       python asana_harvest_dashboard.py
-4. Open the URL it prints (http://127.0.0.1:8765 by default).
+1. pip install -r requirements.txt
+2. Configure .env (see .env.example)
+3. python asanaharvestdashboard.py
+4. Open the URL it prints
 
-Your tokens are stored in a JSON file in your home directory
-(~/.asana_harvest_dashboard.json). They never leave your machine
-except when this app calls Asana and Harvest directly.
-
-TOKENS YOU NEED
----------------
+TOKENS USERS NEED
+-----------------
 - Asana Personal Access Token: https://app.asana.com/0/my-apps
-- Harvest Account ID + Personal Access Token: https://id.getharvest.com/developers
+- Harvest Account ID + PAT: https://id.getharvest.com/developers
 """
 
 import json
 import hashlib
 import os
 import secrets
-import sqlite3
+from sqlalchemy import create_engine, Table, Column, Integer, String, Text, MetaData, DateTime
+from sqlalchemy import func
+from datetime import datetime, timezone
 import sys
 from pathlib import Path
 from typing import Any
+from cryptography.fernet import Fernet
 
 try:
     import httpx
     from fastapi import FastAPI, HTTPException, Request
-    from fastapi.responses import HTMLResponse, JSONResponse, Response
+    from fastapi.responses import HTMLResponse, JSONResponse, Response, RedirectResponse
+    from authlib.integrations.starlette_client import OAuth
     from starlette.middleware.sessions import SessionMiddleware
     import uvicorn
 except ImportError:
-    print("Missing dependencies. Run:\n    pip install fastapi uvicorn httpx")
+    print("Missing dependencies. Run:\n    pip install -r requirements.txt")
     sys.exit(1)
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 PORT = int(os.environ.get("PORT", os.environ.get("DASHBOARD_PORT", "8765")))
-HOST = os.environ.get("DASHBOARD_HOST", "127.0.0.1")
+HOST = os.environ.get("DASHBOARD_HOST", "0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 DB_FILE = Path.home() / ".asana_harvest_dashboard.db"
 SESSION_SECRET = os.environ.get("SESSION_SECRET", "")
+
+if "FERNET_KEY" not in os.environ:
+    print("FATAL: FERNET_KEY environment variable must be set.")
+    sys.exit(1)
+_fernet = Fernet(os.environ["FERNET_KEY"].encode())
+
+def encrypt_creds(creds: dict | None) -> str | None:
+    if not creds:
+        return None
+    return _fernet.encrypt(json.dumps(creds).encode()).decode()
+
+def decrypt_creds(blob: str | None) -> dict | None:
+    if not blob:
+        return None
+    return json.loads(_fernet.decrypt(blob.encode()))
 
 DEFAULT_SETTINGS = {
     "refreshMinutes": 5,
@@ -79,67 +107,32 @@ DEFAULT_STATE = {
 # ---------------------------------------------------------------------------
 # Database
 # ---------------------------------------------------------------------------
-def get_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(DB_FILE))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn
+metadata = MetaData()
 
-def init_db() -> None:
-    conn = get_db()
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL COLLATE NOCASE,
-            password_hash TEXT NOT NULL,
-            salt TEXT NOT NULL,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE IF NOT EXISTS user_data (
-            user_id INTEGER PRIMARY KEY REFERENCES users(id),
-            creds TEXT DEFAULT NULL,
-            tracked TEXT DEFAULT '[]',
-            settings TEXT
-        );
-        CREATE TABLE IF NOT EXISTS app_config (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        );
-    """)
-    # Migration: add projects column if missing
-    try:
-        conn.execute("ALTER TABLE user_data ADD COLUMN projects TEXT DEFAULT '[]'")
-        conn.commit()
-    except Exception:
-        pass  # column already exists
-    # Auto-generate a session secret if not set via env
-    row = conn.execute("SELECT value FROM app_config WHERE key='session_secret'").fetchone()
-    if not row:
-        secret = secrets.token_hex(32)
-        conn.execute("INSERT INTO app_config (key, value) VALUES ('session_secret', ?)", (secret,))
-        conn.commit()
-    conn.close()
+users = Table("users", metadata,
+    Column("id", Integer, primary_key=True),
+    Column("email", String(320), unique=True, nullable=False, index=True),
+    Column("name", String(200)),
+    Column("picture_url", String(500)),
+    Column("created_at", DateTime, default=lambda: datetime.now(timezone.utc)),
+    Column("last_login_at", DateTime),
+)
+
+user_data = Table("user_data", metadata,
+    Column("user_id", Integer, primary_key=True),  # references users.id
+    Column("creds_encrypted", Text),  # Fernet-encrypted JSON
+    Column("tracked", Text, default="[]"),
+    Column("projects", Text, default="[]"),
+    Column("settings", Text, default="{}"),
+)
+
+engine = create_engine(os.environ.get("DATABASE_URL", f"sqlite:///{DB_FILE}"), pool_pre_ping=True)
+metadata.create_all(engine)
 
 def get_session_secret() -> str:
-    if SESSION_SECRET:
-        return SESSION_SECRET
-    conn = get_db()
-    row = conn.execute("SELECT value FROM app_config WHERE key='session_secret'").fetchone()
-    conn.close()
-    return row["value"] if row else secrets.token_hex(32)
+    return SESSION_SECRET or secrets.token_hex(32)
 
-# ---------------------------------------------------------------------------
-# Password hashing
-# ---------------------------------------------------------------------------
-def hash_password(password: str, salt: str = None) -> tuple[str, str]:
-    if salt is None:
-        salt = secrets.token_hex(16)
-    h = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100_000)
-    return h.hex(), salt
-
-def verify_password(password: str, stored_hash: str, salt: str) -> bool:
-    h = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100_000)
-    return secrets.compare_digest(h.hex(), stored_hash)
+# Password hashing removed (switched to Google OAuth)
 
 # ---------------------------------------------------------------------------
 # Per-user storage
@@ -151,82 +144,107 @@ def get_user_id(request: Request) -> int:
     return int(uid)
 
 def load_state(user_id: int) -> dict:
-    conn = get_db()
-    try:
-        row = conn.execute("SELECT creds, tracked, settings, projects FROM user_data WHERE user_id=?", (user_id,)).fetchone()
-    except Exception:
-        row = conn.execute("SELECT creds, tracked, settings FROM user_data WHERE user_id=?", (user_id,)).fetchone()
-    conn.close()
+    with engine.begin() as conn:
+        row = conn.execute(user_data.select().where(user_data.c.user_id == user_id)).fetchone()
     if not row:
         return json.loads(json.dumps(DEFAULT_STATE))
-    creds = json.loads(row["creds"]) if row["creds"] else None
-    tracked = json.loads(row["tracked"]) if row["tracked"] else []
-    projects = json.loads(row["projects"]) if "projects" in row.keys() and row["projects"] else []
-    settings_raw = json.loads(row["settings"]) if row["settings"] else {}
+    
+    # SQLAlchemy 2.0 Row access
+    r_creds = row.creds_encrypted
+    r_tracked = row.tracked
+    r_projects = row.projects
+    r_settings = row.settings
+
+    creds = decrypt_creds(r_creds)
+    tracked = json.loads(r_tracked) if r_tracked else []
+    projects = json.loads(r_projects) if r_projects else []
+    settings_raw = json.loads(r_settings) if r_settings else {}
     merged_settings = {**DEFAULT_SETTINGS, **settings_raw}
     return {"creds": creds, "tracked": tracked, "projects": projects, "settings": merged_settings}
 
 def save_state(user_id: int, state: dict) -> None:
-    conn = get_db()
-    conn.execute(
-        "INSERT INTO user_data (user_id, creds, tracked, settings, projects) VALUES (?, ?, ?, ?, ?) "
-        "ON CONFLICT(user_id) DO UPDATE SET creds=excluded.creds, tracked=excluded.tracked, settings=excluded.settings, projects=excluded.projects",
-        (user_id,
-         json.dumps(state.get("creds")) if state.get("creds") else None,
-         json.dumps(state.get("tracked", [])),
-         json.dumps(state.get("settings", {})),
-         json.dumps(state.get("projects", [])))
-    )
-    conn.commit()
-    conn.close()
+    with engine.begin() as conn:
+        row = conn.execute(user_data.select().where(user_data.c.user_id == user_id)).fetchone()
+        
+        creds = encrypt_creds(state.get("creds"))
+        tracked = json.dumps(state.get("tracked", []))
+        settings = json.dumps(state.get("settings", {}))
+        projects = json.dumps(state.get("projects", []))
+
+        if row:
+            conn.execute(user_data.update().where(user_data.c.user_id == user_id).values(
+                creds_encrypted=creds, tracked=tracked, settings=settings, projects=projects
+            ))
+        else:
+            conn.execute(user_data.insert().values(
+                user_id=user_id, creds_encrypted=creds, tracked=tracked, settings=settings, projects=projects
+            ))
 
 # ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
-init_db()
 app = FastAPI()
-app.add_middleware(SessionMiddleware, secret_key=get_session_secret(), session_cookie="dashboard_session", max_age=60 * 60 * 24 * 365)  # 365 days
+is_prod = bool(os.environ.get("PORT"))
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=get_session_secret(),
+    session_cookie="dashboard_session",
+    max_age=60 * 60 * 24 * 365,
+    https_only=is_prod,
+    same_site="lax",
+)
+
+oauth = OAuth()
+oauth.register(
+    name="google",
+    client_id=os.environ.get("GOOGLE_CLIENT_ID", ""),
+    client_secret=os.environ.get("GOOGLE_CLIENT_SECRET", ""),
+    server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+    client_kwargs={"scope": "openid email profile"},
+)
+
+APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:8765").rstrip("/")
+ALLOWED_DOMAINS = {d.strip().lower() for d in os.environ.get("ALLOWED_EMAIL_DOMAINS", "").split(",") if d.strip()}
 
 # ---------------------------------------------------------------------------
 # Auth endpoints
 # ---------------------------------------------------------------------------
-@app.post("/api/auth/register")
-async def api_register(request: Request):
-    body = await request.json()
-    username = (body.get("username") or "").strip()
-    password = body.get("password") or ""
-    if not username or len(username) < 2:
-        raise HTTPException(status_code=400, detail="Username must be at least 2 characters")
-    if len(password) < 4:
-        raise HTTPException(status_code=400, detail="Password must be at least 4 characters")
-    pw_hash, salt = hash_password(password)
-    conn = get_db()
-    try:
-        conn.execute("INSERT INTO users (username, password_hash, salt) VALUES (?, ?, ?)",
-                     (username, pw_hash, salt))
-        conn.commit()
-        user_id = conn.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()["id"]
-    except sqlite3.IntegrityError:
-        conn.close()
-        raise HTTPException(status_code=400, detail="Username already taken")
-    conn.close()
-    request.session["user_id"] = user_id
-    request.session["username"] = username
-    return {"ok": True, "username": username}
+@app.get("/auth/google/login")
+async def auth_google_login(request: Request):
+    redirect_uri = f"{APP_BASE_URL}/auth/google/callback"
+    return await oauth.google.authorize_redirect(request, redirect_uri)
 
-@app.post("/api/auth/login")
-async def api_login(request: Request):
-    body = await request.json()
-    username = (body.get("username") or "").strip()
-    password = body.get("password") or ""
-    conn = get_db()
-    row = conn.execute("SELECT id, password_hash, salt FROM users WHERE username=?", (username,)).fetchone()
-    conn.close()
-    if not row or not verify_password(password, row["password_hash"], row["salt"]):
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-    request.session["user_id"] = row["id"]
-    request.session["username"] = username
-    return {"ok": True, "username": username}
+@app.get("/auth/google/callback")
+async def auth_google_callback(request: Request):
+    token = await oauth.google.authorize_access_token(request)
+    info = token.get("userinfo") or {}
+    email = (info.get("email") or "").lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="No email in Google response")
+    if ALLOWED_DOMAINS and email.split("@")[-1] not in ALLOWED_DOMAINS:
+        raise HTTPException(status_code=403, detail=f"Email domain not allowed. Contact your admin.")
+
+    # Upsert user
+    with engine.begin() as conn:
+        row = conn.execute(users.select().where(users.c.email == email)).fetchone()
+        now = datetime.now(timezone.utc)
+        if row:
+            conn.execute(users.update().where(users.c.id == row.id).values(
+                name=info.get("name"), picture_url=info.get("picture"), last_login_at=now))
+            user_id = row.id
+        else:
+            result = conn.execute(users.insert().values(
+                email=email, name=info.get("name"), picture_url=info.get("picture"),
+                created_at=now, last_login_at=now))
+            user_id = result.inserted_primary_key[0]
+            # Initialise empty user_data row
+            conn.execute(user_data.insert().values(user_id=user_id))
+
+    request.session["user_id"] = user_id
+    request.session["email"] = email
+    request.session["name"] = info.get("name")
+    request.session["picture"] = info.get("picture")
+    return RedirectResponse("/")
 
 @app.post("/api/auth/logout")
 async def api_logout(request: Request):
@@ -238,7 +256,12 @@ async def api_me(request: Request):
     uid = request.session.get("user_id")
     if not uid:
         raise HTTPException(status_code=401, detail="Not logged in")
-    return {"user_id": uid, "username": request.session.get("username", "")}
+    return {
+        "user_id": uid,
+        "email": request.session.get("email"),
+        "name": request.session.get("name"),
+        "picture": request.session.get("picture"),
+    }
 
 @app.get("/api/state")
 async def api_get_state(request: Request):
@@ -1381,24 +1404,14 @@ function App() {
   if (boot) return <div className="boot"><Icon name="loader" className="icon spin"/></div>;
 
   if (!authUser) {
-    return <AuthView onAuth={async (user) => {
-      setAuthUser(user);
-      try {
-        const s = await apiJson('/api/state');
-        setCreds(s.creds);
-        setTracked(s.tracked || []);
-        setTrackedProjects(s.projects || []);
-        setSettings((cur) => ({ ...cur, ...(s.settings || {}) }));
-        if (s.settings?.workspaceGid) setWorkspaceGid(s.settings.workspaceGid);
-      } catch (e) { setError(e.message); }
-    }}/>;
+    return <AuthView />;
   }
 
   if (!creds?.asanaConfigured || !creds?.harvestConfigured) {
     return <SetupView onConnected={async () => {
       const s = await apiJson('/api/state');
       setCreds(s.creds);
-    }} username={authUser.username} onLogOut={logOut}/>;
+    }} user={authUser} onLogOut={logOut}/>;
   }
 
   if (!asanaUser || !harvestUser) {
@@ -1454,7 +1467,10 @@ function App() {
             <Icon name="settings" className="icon-lg"/>
           </button>
           <div style={{display: 'flex', alignItems: 'center', gap: 8, marginLeft: 4, paddingLeft: 12, borderLeft: '1px solid var(--border)'}}>
-            <span style={{fontSize: 12, color: 'var(--muted)'}}><Icon name="user" className="icon-sm" style={{marginRight: 4}}/> {authUser?.username}</span>
+            <span style={{fontSize: 12, color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: 6}}>
+              {authUser?.picture ? <img src={authUser.picture} style={{width: 16, height: 16, borderRadius: '50%'}} /> : <Icon name="user" className="icon-sm" />}
+              {authUser?.name || authUser?.email}
+            </span>
             <button className="icon-btn" onClick={logOut} title="Log out"><Icon name="logOut" className="icon-sm"/></button>
           </div>
         </div>
@@ -1598,33 +1614,8 @@ function App() {
   );
 }
 
-/* ---------- Auth view (login / register) ---------- */
-function AuthView({ onAuth }) {
-  const [mode, setMode] = useState('login'); // 'login' or 'register'
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPw, setShowPw] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState(null);
-
-  const handle = async () => {
-    setErr(null); setLoading(true);
-    try {
-      const endpoint = mode === 'register' ? '/api/auth/register' : '/api/auth/login';
-      const res = await apiJson(endpoint, {
-        method: 'POST',
-        body: JSON.stringify({ username, password }),
-      });
-      onAuth(res);
-    } catch (e) {
-      setErr(e.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const onKeyDown = (e) => { if (e.key === 'Enter' && username && password) handle(); };
-
+/* ---------- Auth view (login) ---------- */
+function AuthView() {
   return (
     <div className="setup-wrap">
       <div className="setup-card" style={{maxWidth: 400}}>
@@ -1635,53 +1626,10 @@ function AuthView({ onAuth }) {
             <div className="setup-sub">Sign in to your dashboard</div>
           </div>
         </div>
-        <div style={{display: 'flex', borderBottom: '1px solid var(--border)'}}>
-          <button
-            onClick={() => { setMode('login'); setErr(null); }}
-            style={{flex: 1, padding: '10px', background: mode === 'login' ? 'var(--surface-2)' : 'transparent',
-              border: 'none', borderBottom: mode === 'login' ? '2px solid var(--accent)' : '2px solid transparent',
-              color: mode === 'login' ? 'var(--text)' : 'var(--muted)', cursor: 'pointer', fontSize: 13, fontWeight: 500, fontFamily: 'var(--sans)'}}
-          >Sign In</button>
-          <button
-            onClick={() => { setMode('register'); setErr(null); }}
-            style={{flex: 1, padding: '10px', background: mode === 'register' ? 'var(--surface-2)' : 'transparent',
-              border: 'none', borderBottom: mode === 'register' ? '2px solid var(--accent)' : '2px solid transparent',
-              color: mode === 'register' ? 'var(--text)' : 'var(--muted)', cursor: 'pointer', fontSize: 13, fontWeight: 500, fontFamily: 'var(--sans)'}}
-          >Create Account</button>
-        </div>
-        <div className="setup-body">
-          <div className="field">
-            <label className="field-label">Username</label>
-            <div className="input-wrap">
-              <span className="input-icon"><Icon name="user" className="icon-sm"/></span>
-              <input value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={onKeyDown}
-                placeholder="Enter username" className="input" autoComplete="username" autoFocus/>
-            </div>
-          </div>
-          <div className="field">
-            <label className="field-label">Password</label>
-            <div className="input-wrap">
-              <span className="input-icon"><Icon name="key" className="icon-sm"/></span>
-              <input type={showPw ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={onKeyDown}
-                placeholder="Enter password" className="input" autoComplete={mode === 'register' ? 'new-password' : 'current-password'}/>
-              <button className="eye-btn" onClick={() => setShowPw(!showPw)} type="button">
-                <Icon name={showPw ? 'eyeOff' : 'eye'} className="icon-sm"/>
-              </button>
-            </div>
-          </div>
-
-          {err && <div className="err-box"><Icon name="alert"/><span>{err}</span></div>}
-
-          <button
-            className="btn-primary"
-            style={{marginTop: 14, width: '100%', justifyContent: 'center'}}
-            disabled={!username || !password || loading}
-            onClick={handle}
-          >
-            {loading
-              ? <><Icon name="loader" className="icon spin"/> {mode === 'register' ? 'Creating...' : 'Signing in...'}</>
-              : mode === 'register' ? 'Create Account' : 'Sign In'}
-          </button>
+        <div className="setup-body" style={{textAlign: 'center', padding: '40px 20px'}}>
+          <a href="/auth/google/login" className="btn-primary" style={{display: 'inline-flex', padding: '12px 24px', fontSize: 14}}>
+            Sign in with Google
+          </a>
         </div>
       </div>
     </div>
@@ -1689,7 +1637,7 @@ function AuthView({ onAuth }) {
 }
 
 /* ---------- Setup view ---------- */
-function SetupView({ onConnected, username, onLogOut }) {
+function SetupView({ onConnected, user, onLogOut }) {
   const [asanaToken, setAsanaToken] = useState('');
   const [harvestAccountId, setHarvestAccountId] = useState('');
   const [harvestToken, setHarvestToken] = useState('');
@@ -1722,16 +1670,17 @@ function SetupView({ onConnected, username, onLogOut }) {
             <h1 className="setup-title">Asana / Harvest</h1>
             <div className="setup-sub">Estimated vs actual, side by side</div>
           </div>
-          {username && (
+          {user && (
             <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
-              <span style={{fontSize: 11, color: 'var(--muted)'}}>{username}</span>
+              {user.picture && <img src={user.picture} style={{width: 24, height: 24, borderRadius: '50%'}} />}
+              <span style={{fontSize: 11, color: 'var(--muted)'}}>{user.name || user.email}</span>
               <button className="icon-btn" onClick={onLogOut} title="Log out"><Icon name="logOut" className="icon-sm"/></button>
             </div>
           )}
         </div>
         <div className="setup-body">
           <p style={{color: 'var(--muted)', fontSize: 13, lineHeight: 1.55, margin: '0 0 18px'}}>
-            Tokens are stored on your machine only. They go to Asana and Harvest, nowhere else.
+            Your tokens are encrypted before being saved and are only decrypted to call Asana and Harvest on your behalf.
           </p>
 
           <div className="field">
@@ -2821,6 +2770,10 @@ root.render(<App />);
 </body>
 </html>
 """
+
+@app.get("/healthz")
+async def healthz():
+    return {"ok": True}
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
