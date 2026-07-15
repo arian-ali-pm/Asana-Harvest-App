@@ -96,6 +96,7 @@ DEFAULT_SETTINGS = {
     "estimateFieldName": "",   # Asana custom field name to read estimates from
     "estimateFieldUnit": "hours",  # "hours" or "minutes"
     "showCustomFields": False, # debug: show all numeric custom fields on tracked rows
+    "colorTheme": "brand",  # "brand" (Asana red / Harvest orange) or "classic" (purple / mint)
 }
 
 DEFAULT_STATE = {
@@ -458,6 +459,8 @@ HTML = r"""<!doctype html>
   --sans: 'Inter', system-ui, sans-serif;
   --display: 'Bricolage Grotesque', 'Inter', sans-serif;
 }
+/* Color theme: "classic" restores the pre-rebrand purple/mint Asana/Harvest colors */
+.theme-classic { --asana: var(--lilac); --harvest: var(--mint); }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14px; }
 @keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
@@ -871,7 +874,7 @@ function App() {
   const [harvestUser, setHarvestUser] = useState(null);
   const [harvestBaseUrl, setHarvestBaseUrl] = useState(null);
   const [workspaceGid, setWorkspaceGid] = useState('');
-  const [settings, setSettings] = useState({ refreshMinutes: 5, harvestFromDays: 90, onlyMyHarvestEntries: true, workspaceGid: '', estimateFieldName: '', estimateFieldUnit: 'hours', showCustomFields: false });
+  const [settings, setSettings] = useState({ refreshMinutes: 5, harvestFromDays: 90, onlyMyHarvestEntries: true, workspaceGid: '', estimateFieldName: '', estimateFieldUnit: 'hours', showCustomFields: false, colorTheme: 'brand' });
 
   const [tab, setTab] = useState('dashboard');
   const [asanaQuery, setAsanaQuery] = useState('');
@@ -1478,7 +1481,7 @@ function App() {
   }, { estimated: 0, asanaLogged: 0, harvest: 0 });
 
   return (
-    <div className="app-root">
+    <div className={`app-root ${settings.colorTheme === 'classic' ? 'theme-classic' : ''}`}>
       <header className="header">
         <div className="header-left">
           <div className="brand-mark"><img src="/static/logo.svg" alt="Logo"/></div>
@@ -2636,6 +2639,25 @@ function SettingsModal({ settings, onSave, onClose, onSignOut }) {
               onChange={(e) => setLocal({ ...local, onlyMyHarvestEntries: e.target.checked })}/>
             <span>Only count my Harvest time entries</span>
           </label>
+
+          <div style={{height: 1, background: 'var(--border)', margin: '18px 0 14px'}}></div>
+          <div style={{fontSize: 11.5, fontWeight: 600, color: 'var(--text-2)', letterSpacing: 0.3, marginBottom: 10, textTransform: 'uppercase'}}>Appearance</div>
+
+          <div className="field">
+            <label className="field-label">Asana / Harvest colors</label>
+            <div style={{display: 'flex', gap: 18, padding: '4px 0'}}>
+              <label className="check-row" style={{margin: 0}}>
+                <input type="radio" name="colorTheme" checked={(local.colorTheme || 'brand') === 'brand'}
+                  onChange={() => setLocal({ ...local, colorTheme: 'brand' })}/>
+                <span>App colors (Asana red, Harvest orange)</span>
+              </label>
+              <label className="check-row" style={{margin: 0}}>
+                <input type="radio" name="colorTheme" checked={local.colorTheme === 'classic'}
+                  onChange={() => setLocal({ ...local, colorTheme: 'classic' })}/>
+                <span>Classic (purple / mint)</span>
+              </label>
+            </div>
+          </div>
 
           <div style={{height: 1, background: 'var(--border)', margin: '18px 0 14px'}}></div>
           <div style={{fontSize: 11.5, fontWeight: 600, color: 'var(--text-2)', letterSpacing: 0.3, marginBottom: 10, textTransform: 'uppercase'}}>Asana estimates</div>
