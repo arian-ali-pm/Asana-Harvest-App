@@ -8,6 +8,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application
 COPY asanaharvestdashboard.py .
+COPY static ./static
 
 # Create data directory for SQLite
 RUN mkdir -p /data

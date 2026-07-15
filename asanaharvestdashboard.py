@@ -57,6 +57,7 @@ try:
     import httpx
     from fastapi import FastAPI, HTTPException, Request
     from fastapi.responses import HTMLResponse, JSONResponse, Response, RedirectResponse
+    from fastapi.staticfiles import StaticFiles
     from authlib.integrations.starlette_client import OAuth
     from starlette.middleware.sessions import SessionMiddleware
     import uvicorn
@@ -193,6 +194,7 @@ app.add_middleware(
     https_only=is_prod,
     same_site="lax",
 )
+app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 
 oauth = OAuth()
 oauth.register(
@@ -426,6 +428,10 @@ HTML = r"""<!doctype html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Asana / Harvest</title>
+<link rel="icon" type="image/svg+xml" href="/static/logo.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Bricolage+Grotesque:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -482,8 +488,9 @@ input, select { font-family: var(--sans); }
   display: flex; align-items: center; gap: 14px;
   background: linear-gradient(180deg, #1c1f29 0%, #15171c 100%); }
 .brand-mark { width: 36px; height: 36px; border-radius: 8px;
-  background: linear-gradient(135deg, #ead089 0%, #c98c5a 100%); color: #1a1a1f;
+  background: #21242e; color: #1a1a1f;
   display: flex; align-items: center; justify-content: center; }
+.brand-mark img { width: 30px; height: 30px; display: block; }
 .setup-title { margin: 0; font-size: 17px; font-family: var(--display); font-weight: 600; letter-spacing: -0.2px; }
 .setup-sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
 .setup-body { padding: 20px 22px 22px; }
@@ -1436,7 +1443,7 @@ function App() {
     <div className="app-root">
       <header className="header">
         <div className="header-left">
-          <div className="brand-mark"><Icon name="activity"/></div>
+          <div className="brand-mark"><img src="/static/logo.svg" alt="Logo"/></div>
           <div>
             <div className="brand-title">Asana <span className="brand-sep">/</span> Harvest</div>
             <div className="brand-sub">
@@ -1620,7 +1627,7 @@ function AuthView() {
     <div className="setup-wrap">
       <div className="setup-card" style={{maxWidth: 400}}>
         <div className="setup-hero">
-          <div className="brand-mark"><Icon name="activity" className="icon-lg"/></div>
+          <div className="brand-mark"><img src="/static/logo.svg" alt="Logo"/></div>
           <div>
             <h1 className="setup-title">Asana / Harvest</h1>
             <div className="setup-sub">Sign in to your dashboard</div>
@@ -1665,7 +1672,7 @@ function SetupView({ onConnected, user, onLogOut }) {
     <div className="setup-wrap">
       <div className="setup-card">
         <div className="setup-hero">
-          <div className="brand-mark"><Icon name="activity" className="icon-lg"/></div>
+          <div className="brand-mark"><img src="/static/logo.svg" alt="Logo"/></div>
           <div style={{flex: 1}}>
             <h1 className="setup-title">Asana / Harvest</h1>
             <div className="setup-sub">Estimated vs actual, side by side</div>

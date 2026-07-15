@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 220" width="220" height="220">
+  <!-- Top bar -->
+  <path d="M110,15 L182,15 A12,12 0 0 1 194,27 A12,12 0 0 1 182,39 L110,39 Z" fill="#8596E6"/>
+  <path d="M110,15 L38,15 A12,12 0 0 0 26,27 A12,12 0 0 0 38,39 L110,39 Z" fill="#6AE4C3"/>
+
+  <!-- Bottom bar -->
+  <path d="M110,181 L182,181 A12,12 0 0 0 194,193 A12,12 0 0 0 182,205 L110,205 Z" fill="#8596E6"/>
+  <path d="M110,181 L38,181 A12,12 0 0 1 26,193 A12,12 0 0 1 38,205 L110,205 Z" fill="#6AE4C3"/>
+
+  <!-- Ribbons (hourglass body) -->
+  <path d="M44,44 C44,88 78,98 110,110 C142,122 176,132 176,176"
+        fill="none" stroke="#6AE4C3" stroke-width="19" stroke-linecap="round"/>
+  <path d="M176,44 C176,88 142,98 110,110 C78,122 44,132 44,176"
+        fill="none" stroke="#8596E6" stroke-width="19" stroke-linecap="round"/>
+
+  <!-- Sand pool top -->
+  <path d="M110,66 C120,78 126,85 126,93 C126,101 119,107 110,107 C101,107 94,101 94,93 C94,84 102,76 110,66 Z" fill="#6AE4C3"/>
+
+  <!-- Sand dots bottom -->
+  <circle cx="110" cy="150" r="10" fill="#6AE4C3"/>
+  <circle cx="91" cy="169" r="7" fill="#8596E6"/>
+  <circle cx="115" cy="174" r="8" fill="#8596E6"/>
+</svg>
