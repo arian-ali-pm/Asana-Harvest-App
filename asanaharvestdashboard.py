@@ -452,6 +452,8 @@ HTML = r"""<!doctype html>
   --danger: #f87171;
   --warn: #fbbf24;
   --accent: #ead089;
+  --asana: #f2726f;
+  --harvest: #f0883e;
   --mono: 'JetBrains Mono', ui-monospace, monospace;
   --sans: 'Inter', system-ui, sans-serif;
   --display: 'Bricolage Grotesque', 'Inter', sans-serif;
@@ -576,6 +578,8 @@ input, select { font-family: var(--sans); }
 .tc-amber { color: var(--amber); }
 .tc-mint { color: var(--mint); }
 .tc-danger { color: var(--danger); }
+.tc-asana { color: var(--asana); }
+.tc-harvest { color: var(--harvest); }
 
 /* Table */
 .table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
@@ -590,14 +594,21 @@ input, select { font-family: var(--sans); }
 
 .item-label { font-size: 13.5px; font-weight: 500; color: var(--text); margin-bottom: 4px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item-label-row { display: flex; align-items: center; gap: 2px; margin-bottom: 4px; }
+.row-inline-btn { opacity: 0.45; }
+.table-row:hover .row-inline-btn { opacity: 1; }
+.rename-input { width: 100%; font-size: 13.5px; font-weight: 500; color: var(--text); font-family: var(--sans);
+  background: var(--surface-2); border: 1px solid var(--accent); border-radius: 4px; padding: 3px 6px; outline: none; margin-bottom: 4px; }
+.item-path-detail { margin-top: 6px; padding: 7px 10px; background: var(--surface-2); border: 1px solid var(--border-2);
+  border-radius: 6px; font-size: 11.5px; color: var(--text-2); line-height: 1.6; }
 .item-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11.5px; }
 .meta-tag { font-size: 11px; color: var(--muted); background: var(--surface-3); padding: 2px 7px; border-radius: 3px; }
 .chip-a { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px;
-  background: #251f33; color: var(--lilac); border-radius: 3px; font-size: 11px; }
+  background: rgba(242, 114, 111, 0.12); color: var(--asana); border-radius: 3px; font-size: 11px; }
 .chip-h { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px;
-  background: #15282a; color: var(--mint); border-radius: 3px; font-size: 11px; }
-.chip-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--lilac); }
-.chip-dot-h { width: 5px; height: 5px; border-radius: 50%; background: var(--mint); }
+  background: rgba(240, 136, 62, 0.12); color: var(--harvest); border-radius: 3px; font-size: 11px; }
+.chip-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--asana); }
+.chip-dot-h { width: 5px; height: 5px; border-radius: 50%; background: var(--harvest); }
 .chip-missing { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px;
   background: var(--surface-3); color: var(--muted); border: 1px dashed var(--border-2);
   border-radius: 3px; font-size: 10.5px; cursor: pointer; }
@@ -659,6 +670,8 @@ input, select { font-family: var(--sans); }
 .table-row { transition: background 0.12s, box-shadow 0.12s; }
 .row-dragging { opacity: 0.45; }
 .row-drop-target { background: rgba(234, 208, 137, 0.08); box-shadow: inset 0 0 0 1px var(--accent); }
+.row-drop-before { box-shadow: inset 0 2px 0 0 var(--accent); }
+.row-drop-after { box-shadow: inset 0 -2px 0 0 var(--accent); }
 .merge-hint { display: flex; align-items: center; gap: 8px; padding: 8px 12px; margin-bottom: 14px;
   background: rgba(234, 208, 137, 0.05); border: 1px dashed rgba(234, 208, 137, 0.25);
   border-radius: 6px; color: var(--text-2); font-size: 12px; }
@@ -716,6 +729,7 @@ const Icon = ({ name, className = "icon" }) => {
     user: <><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></>,
     logOut: <><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></>,
     download: <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></>,
+    edit: <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>,
   };
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -855,6 +869,7 @@ function App() {
   const [creds, setCreds] = useState(null); // {asanaConfigured, harvestConfigured} from server
   const [asanaUser, setAsanaUser] = useState(null);
   const [harvestUser, setHarvestUser] = useState(null);
+  const [harvestBaseUrl, setHarvestBaseUrl] = useState(null);
   const [workspaceGid, setWorkspaceGid] = useState('');
   const [settings, setSettings] = useState({ refreshMinutes: 5, harvestFromDays: 90, onlyMyHarvestEntries: true, workspaceGid: '', estimateFieldName: '', estimateFieldUnit: 'hours', showCustomFields: false });
 
@@ -927,6 +942,10 @@ function App() {
         if (!workspaceGid && aUser.workspaces[0]) setWorkspaceGid(aUser.workspaces[0].gid);
         const hMe = await harvestGet('users/me');
         setHarvestUser({ id: hMe.id, first_name: hMe.first_name, last_name: hMe.last_name });
+        try {
+          const company = await harvestGet('company');
+          if (company?.base_uri) setHarvestBaseUrl(company.base_uri);
+        } catch (e) { /* non-fatal: Harvest links just won't be clickable */ }
         await loadHarvestProjects();
       } catch (e) {
         setError(e.message);
@@ -1399,6 +1418,25 @@ function App() {
     refreshAndSave(targetId);
   };
 
+  const renameTracked = async (id, label) => {
+    const next = trackedRef.current.map((t) => t.id === id ? { ...t, label } : t);
+    await saveTracked(next);
+  };
+
+  // Drag-and-drop reordering: move `sourceId` immediately before/after `targetId`.
+  const reorderItems = async (sourceId, targetId, position) => {
+    if (!sourceId || !targetId || sourceId === targetId) return;
+    const list = trackedRef.current;
+    const source = list.find((t) => t.id === sourceId);
+    if (!source) return;
+    const rest = list.filter((t) => t.id !== sourceId);
+    const targetIdx = rest.findIndex((t) => t.id === targetId);
+    if (targetIdx === -1) return;
+    const insertAt = position === 'after' ? targetIdx + 1 : targetIdx;
+    const next = [...rest.slice(0, insertAt), source, ...rest.slice(insertAt)];
+    await saveTracked(next);
+  };
+
   /* Workspace change: persist */
   useEffect(() => {
     if (workspaceGid && workspaceGid !== settings.workspaceGid) {
@@ -1526,6 +1564,9 @@ function App() {
             setDraggingId={setDraggingId}
             canMerge={canMerge}
             mergeItems={mergeItems}
+            onReorder={reorderItems}
+            onRename={renameTracked}
+            harvestBaseUrl={harvestBaseUrl}
             onImportAsana={importMyAsanaTasks}
             importing={importing}
           />
@@ -1738,7 +1779,7 @@ function SetupView({ onConnected, user, onLogOut }) {
 }
 
 /* ---------- Dashboard ---------- */
-function DashboardView({ tracked, totals, onRemove, onPickLink, refreshing, settings, onInspect, draggingId, setDraggingId, canMerge, mergeItems, onImportAsana, importing }) {
+function DashboardView({ tracked, totals, onRemove, onPickLink, refreshing, settings, onInspect, draggingId, setDraggingId, canMerge, mergeItems, onReorder, onRename, harvestBaseUrl, onImportAsana, importing }) {
   if (tracked.length === 0) {
     return (
       <div className="empty-state">
@@ -1762,9 +1803,9 @@ function DashboardView({ tracked, totals, onRemove, onPickLink, refreshing, sett
       <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16}}>
         <div style={{display: 'flex', gap: 12, flex: 1}}>
           <div className="totals-row" style={{flex: 1, margin: 0}}>
-            <TotalCard label="Estimated (Asana)" value={fmtH(totals.estimated)} accent="lilac"/>
+            <TotalCard label="Estimated (Asana)" value={fmtH(totals.estimated)} accent="asana"/>
             <TotalCard label="Logged in Asana" value={fmtH(totals.asanaLogged)} accent="amber"/>
-            <TotalCard label="Actual (Harvest)" value={fmtH(totals.harvest)} accent="mint"/>
+            <TotalCard label="Actual (Harvest)" value={fmtH(totals.harvest)} accent="harvest"/>
             <TotalCard
               label="vs Estimate"
               value={pctOfEst != null ? `${pctOfEst.toFixed(0)}%` : '\u2014'}
@@ -1782,16 +1823,17 @@ function DashboardView({ tracked, totals, onRemove, onPickLink, refreshing, sett
         </button>
       </div>
 
-      {hasMergeable && (
-        <div className="merge-hint">
-          <Icon name="link" className="icon-sm"/>
-          <span>Drag an Asana-only row onto a Harvest-only row (or vice versa) to merge them.</span>
-        </div>
-      )}
+      <div className="merge-hint">
+        <Icon name="link" className="icon-sm"/>
+        <span>
+          Drag any row by its handle to reorder.
+          {hasMergeable && ' Drop an Asana-only row onto a Harvest-only row (or vice versa) to merge them.'}
+        </span>
+      </div>
 
       <div className="table-wrap">
         <div className="table-head">
-          <div style={{flex: 3}}>Item</div>
+          <div style={{flex: 3}}>TASK</div>
           <div className="t-col t-col-wide">Harvest (Tracked Hours)</div>
           <div className="t-col t-col-wide">Asana (Est. Hours)</div>
           <div className="t-col t-col-wide">Used Capacity</div>
@@ -1803,12 +1845,14 @@ function DashboardView({ tracked, totals, onRemove, onPickLink, refreshing, sett
             onRemove={() => onRemove(t.id)}
             onLink={() => onPickLink(t.id)}
             onInspect={() => onInspect(t.id)}
+            onRename={(label) => onRename(t.id, label)}
             refreshing={refreshing} settings={settings}
             draggingId={draggingId}
             setDraggingId={setDraggingId}
             canMergeFromHere={(srcId) => canMerge ? canMerge(srcId, t.id) : false}
             onDropMerge={(srcId) => mergeItems && mergeItems(srcId, t.id)}
-            isDraggable={(!!t.asana && !t.harvest) || (!t.asana && !!t.harvest)}
+            onReorder={(srcId, position) => onReorder && onReorder(srcId, t.id, position)}
+            harvestBaseUrl={harvestBaseUrl}
           />
         ))}
       </div>
@@ -1816,7 +1860,7 @@ function DashboardView({ tracked, totals, onRemove, onPickLink, refreshing, sett
   );
 }
 
-function TrackedRow({ item, onRemove, onLink, onInspect, refreshing, settings, draggingId, setDraggingId, canMergeFromHere, onDropMerge, isDraggable }) {
+function TrackedRow({ item, onRemove, onLink, onInspect, onRename, refreshing, settings, draggingId, setDraggingId, canMergeFromHere, onDropMerge, onReorder, harvestBaseUrl }) {
   const est = minToH(item.asana?.estimated_minutes);
   const asanaLogged = minToH(item.asana?.actual_time_minutes);
   const harvest = item.harvest_hours;
@@ -1825,63 +1869,107 @@ function TrackedRow({ item, onRemove, onLink, onInspect, refreshing, settings, d
   const debug = !!settings?.showCustomFields;
   const cfs = item.asana?.custom_fields_numeric || [];
 
-  const [isOver, setIsOver] = useState(false);
+  const [dropPos, setDropPos] = useState(null); // 'merge' | 'before' | 'after' | null
+  const [editing, setEditing] = useState(false);
+  const [draftLabel, setDraftLabel] = useState(item.label);
+  const [pathOpen, setPathOpen] = useState(false);
   const beingDragged = draggingId === item.id;
-  const isValidDrop = draggingId && canMergeFromHere && canMergeFromHere(draggingId);
+  const isValidMergeTarget = !!draggingId && draggingId !== item.id && canMergeFromHere && canMergeFromHere(draggingId);
+  const harvestUrl = item.harvest && harvestBaseUrl ? `${harvestBaseUrl}/projects/${item.harvest.project_id}` : null;
+
+  const commitRename = () => {
+    setEditing(false);
+    const trimmed = draftLabel.trim();
+    if (trimmed && trimmed !== item.label) onRename(trimmed);
+    else setDraftLabel(item.label);
+  };
 
   return (
     <div
-      className={`table-row ${beingDragged ? 'row-dragging' : ''} ${isOver && isValidDrop ? 'row-drop-target' : ''}`}
-      draggable={isDraggable}
+      className={`table-row ${beingDragged ? 'row-dragging' : ''} ${dropPos === 'merge' ? 'row-drop-target' : ''} ${dropPos === 'before' ? 'row-drop-before' : ''} ${dropPos === 'after' ? 'row-drop-after' : ''}`}
+      draggable
       onDragStart={(e) => {
-        if (!isDraggable) { e.preventDefault(); return; }
         try {
           e.dataTransfer.setData('text/plain', item.id);
-          e.dataTransfer.effectAllowed = 'link';
+          e.dataTransfer.effectAllowed = 'all';
         } catch {}
         setDraggingId(item.id);
       }}
-      onDragEnd={() => { setDraggingId(null); setIsOver(false); }}
+      onDragEnd={() => { setDraggingId(null); setDropPos(null); }}
       onDragOver={(e) => {
-        if (isValidDrop) { e.preventDefault(); e.dataTransfer.dropEffect = 'link'; setIsOver(true); }
+        if (!draggingId || draggingId === item.id) return;
+        e.preventDefault();
+        if (isValidMergeTarget) {
+          e.dataTransfer.dropEffect = 'link';
+          setDropPos('merge');
+        } else {
+          e.dataTransfer.dropEffect = 'move';
+          const rect = e.currentTarget.getBoundingClientRect();
+          setDropPos(e.clientY < rect.top + rect.height / 2 ? 'before' : 'after');
+        }
       }}
-      onDragLeave={() => setIsOver(false)}
+      onDragLeave={() => setDropPos(null)}
       onDrop={(e) => {
         e.preventDefault();
         const srcId = e.dataTransfer.getData('text/plain') || draggingId;
-        setIsOver(false);
+        const pos = dropPos;
+        setDropPos(null);
         setDraggingId(null);
-        if (srcId) onDropMerge(srcId);
+        if (!srcId || srcId === item.id) return;
+        if (pos === 'merge') onDropMerge(srcId);
+        else onReorder(srcId, pos === 'after' ? 'after' : 'before');
       }}
     >
       <div style={{flex: 3, minWidth: 0, display: 'flex', alignItems: 'flex-start', gap: 10}}>
-        {isDraggable && <span className="drag-handle" title="Drag to merge with another row"><Icon name="grip" className="icon-sm"/></span>}
+        <span className="drag-handle" title="Drag to reorder"><Icon name="grip" className="icon-sm"/></span>
         <div style={{flex: 1, minWidth: 0}}>
-          <div className="item-label">{item.label}</div>
+          {editing ? (
+            <input
+              className="rename-input"
+              autoFocus
+              value={draftLabel}
+              onChange={(e) => setDraftLabel(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') e.currentTarget.blur();
+                if (e.key === 'Escape') { setDraftLabel(item.label); setEditing(false); }
+              }}
+              onBlur={commitRename}
+            />
+          ) : (
+            <div className="item-label-row">
+              <span className="item-label" style={{marginBottom: 0, flex: 1, minWidth: 0}}>{item.label}</span>
+              <button className="icon-btn row-inline-btn" onClick={() => { setDraftLabel(item.label); setEditing(true); }} title="Rename">
+                <Icon name="edit" className="icon-sm"/>
+              </button>
+              {(item.asana || item.harvest) && (
+                <button className="icon-btn row-inline-btn" onClick={() => setPathOpen((v) => !v)} title={pathOpen ? 'Hide full names' : 'Show full names'}>
+                  <Icon name="chev" className="icon-sm" style={{transform: pathOpen ? 'rotate(90deg)' : 'none', transition: 'transform .15s'}}/>
+                </button>
+              )}
+            </div>
+          )}
           <div className="item-meta">
-            {item.asana ? (
+            {item.asana && (
               <a href={item.asana.permalink_url} target="_blank" rel="noreferrer" className="chip-a">
-                <span className="chip-dot"></span>
-                Asana {item.asana.projectName ? `\u2022 ${item.asana.projectName}` : ''}
-                <Icon name="external" className="icon-sm"/>
+                <span className="chip-dot"></span>Asana<Icon name="external" className="icon-sm"/>
               </a>
-            ) : (
-              <button className="chip-missing" onClick={onLink}>
-                <Icon name="link" className="icon-sm"/> Link Asana
-              </button>
             )}
-            {item.harvest ? (
-              <span className="chip-h">
-                <span className="chip-dot-h"></span>
-                Harvest \u2022 {item.harvest.project_name}{item.harvest.task_name ? ` / ${item.harvest.task_name}` : ''}
-              </span>
-            ) : (
-              <button className="chip-missing" onClick={onLink}>
-                <Icon name="link" className="icon-sm"/> Link Harvest
-              </button>
+            {item.harvest && (
+              harvestUrl ? (
+                <a href={harvestUrl} target="_blank" rel="noreferrer" className="chip-h">
+                  <span className="chip-dot-h"></span>Harvest<Icon name="external" className="icon-sm"/>
+                </a>
+              ) : (
+                <span className="chip-h"><span className="chip-dot-h"></span>Harvest</span>
+              )
             )}
-
           </div>
+          {pathOpen && (item.asana || item.harvest) && (
+            <div className="item-path-detail">
+              {item.asana && <div>Asana: {item.asana.projectName ? `${item.asana.projectName} / ` : ''}{item.asana.name}</div>}
+              {item.harvest && <div>Harvest: {item.harvest.project_name}{item.harvest.task_name ? ` / ${item.harvest.task_name}` : ''}</div>}
+            </div>
+          )}
           {debug && item.asana && (
             <div style={{marginTop: 6, padding: '6px 8px', background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 4, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', lineHeight: 1.6}}>
               {cfs.length === 0
@@ -1891,10 +1979,10 @@ function TrackedRow({ item, onRemove, onLink, onInspect, refreshing, settings, d
           )}
         </div>
       </div>
-      <div className="t-col t-col-wide num-cell" style={{color: 'var(--mint)'}}>
+      <div className="t-col t-col-wide num-cell" style={{color: 'var(--harvest)'}}>
         {refreshing && item.harvest && harvest == null ? <Icon name="loader" className="icon-sm spin"/> : fmtH(harvest)}
       </div>
-      <div className="t-col t-col-wide num-cell" style={{color: 'var(--lilac)'}}>
+      <div className="t-col t-col-wide num-cell" style={{color: 'var(--asana)'}}>
         {fmtH(est)}
       </div>
       <div className="t-col t-col-wide">
